@@ -12,7 +12,7 @@ use tokio::time::sleep;
 use super::{key_uploader, CopyDirection, CopyOptions, Host, RebootOptions};
 use crate::error::{ColmenaError, ColmenaResult};
 use crate::job::JobHandle;
-use crate::nix::{Goal, Key, Profile, StorePath, CURRENT_PROFILE, SYSTEM_PROFILE};
+use crate::nix::{Goal, Key, NodeConfig, Profile, StorePath, CURRENT_PROFILE, SYSTEM_PROFILE};
 use crate::util::{CommandExecution, CommandExt};
 
 /// A remote machine connected over SSH.
@@ -107,7 +107,7 @@ impl Host for Ssh {
         self.run_command(command).await
     }
 
-    async fn get_current_system_profile(&mut self) -> ColmenaResult<Profile> {
+    async fn get_current_system_profile(&mut self, config: &NodeConfig) -> ColmenaResult<Profile> {
         let paths = self
             .ssh(&["readlink", "-e", CURRENT_PROFILE])
             .capture_output()
@@ -120,10 +120,13 @@ impl Host for Ssh {
             .to_string()
             .try_into()?;
 
-        Ok(Profile::from_store_path_unchecked(path))
+        Ok(Profile::from_store_path_unchecked(
+            path,
+            config.profile_type(),
+        ))
     }
 
-    async fn get_main_system_profile(&mut self) -> ColmenaResult<Profile> {
+    async fn get_main_system_profile(&mut self, config: &NodeConfig) -> ColmenaResult<Profile> {
         let command = format!(
             "\"readlink -e {} || readlink -e {}\"",
             SYSTEM_PROFILE, CURRENT_PROFILE
@@ -138,7 +141,10 @@ impl Host for Ssh {
             .to_string()
             .try_into()?;
 
-        Ok(Profile::from_store_path_unchecked(path))
+        Ok(Profile::from_store_path_unchecked(
+            path,
+            config.profile_type(),
+        ))
     }
 
     async fn run_command(&mut self, command: &[&str]) -> ColmenaResult<()> {
@@ -146,7 +152,7 @@ impl Host for Ssh {
         self.run_command(command).await
     }
 
-    async fn reboot(&mut self, options: RebootOptions) -> ColmenaResult<()> {
+    async fn reboot(&mut self, config: &NodeConfig, options: RebootOptions) -> ColmenaResult<()> {
         if !options.wait_for_boot {
             return self.initate_reboot().await;
         }
@@ -173,7 +179,7 @@ impl Host for Ssh {
 
         // Ensure node has correct system profile
         if let Some(new_profile) = options.new_profile {
-            let profile = self.get_current_system_profile().await?;
+            let profile = self.get_current_system_profile(config).await?;
 
             if new_profile != profile {
                 return Err(ColmenaError::ActiveProfileUnexpected { profile });

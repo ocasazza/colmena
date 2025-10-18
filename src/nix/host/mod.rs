@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 
-use super::{Goal, Key, Profile, StorePath};
+use super::{Goal, Key, NodeConfig, Profile, StorePath};
 use crate::error::{ColmenaError, ColmenaResult};
 use crate::job::JobHandle;
 
@@ -158,14 +158,14 @@ pub trait Host: Send + Sync + std::fmt::Debug {
     }
 
     /// Returns the current system profile on the host.
-    async fn get_current_system_profile(&mut self) -> ColmenaResult<Profile>;
+    async fn get_current_system_profile(&mut self, config: &NodeConfig) -> ColmenaResult<Profile>;
 
     /// Returns the main system profile on the host.
     ///
     /// This may _not_ be the system profile that's currently activated!
     /// It will first try `/nix/var/nix/profiles/system`, falling back
     /// to `/run/current-system` if it doesn't exist.
-    async fn get_main_system_profile(&mut self) -> ColmenaResult<Profile>;
+    async fn get_main_system_profile(&mut self, config: &NodeConfig) -> ColmenaResult<Profile>;
 
     /// Activates a system profile on the host, if it runs NixOS.
     ///
@@ -183,7 +183,7 @@ pub trait Host: Send + Sync + std::fmt::Debug {
 
     /// Reboots the host.
     #[allow(unused_variables)]
-    async fn reboot(&mut self, options: RebootOptions) -> ColmenaResult<()> {
+    async fn reboot(&mut self, config: &NodeConfig, options: RebootOptions) -> ColmenaResult<()> {
         Err(ColmenaError::Unsupported)
     }
 }

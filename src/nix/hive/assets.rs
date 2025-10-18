@@ -15,9 +15,124 @@ use super::{Flake, HivePath};
 use crate::error::ColmenaResult;
 use crate::nix::flake::lock_flake_quiet;
 
-const FLAKE_NIX: &str = include_str!("flake.nix");
+const FLAKE_NIX: &str = "{
+  description = \"Colmena Asset Flake\";
+  inputs.hive.url = \"%hive%\";
+  outputs = { self, hive }:
+    let
+      eval = import ./eval.nix;
+      options = import ./options.nix;
+      modules = import ./modules.nix;
+    in {
+      processFlake = eval {
+        rawFlake = hive;
+        hermetic = true;
+        colmenaOptions = options;
+        colmenaModules = modules;
+      };
+    };
+}
+";
 const EVAL_NIX: &[u8] = include_bytes!("eval.nix");
-const OPTIONS_NIX: &[u8] = include_bytes!("options.nix");
+const OPTIONS_NIX: &[u8] = b"{
+  deploymentOptions = { config, lib, ... }: with lib; {
+    options.deployment = {
+      profileType = mkOption {
+        type = types.enum [ \"nixos\" \"nix-darwin\" ];
+        default = \"nixos\";
+        description = \"Type of the profile to build and deploy.\";
+      };
+
+      targetHost = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = \"The host to deploy to.\";
+      };
+
+      targetUser = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = \"The user to use to connect to the host.\";
+      };
+
+      targetPort = mkOption {
+        type = types.nullOr types.port;
+        default = null;
+        description = \"The port to use to connect to the host.\";
+      };
+
+      buildOnTarget = mkOption {
+        type = types.bool;
+        default = false;
+        description = \"Whether to build the profile on the target host.\";
+      };
+
+      replaceUnknownProfiles = mkOption {
+        type = types.bool;
+        default = false;
+        description = \"Whether to replace unknown profiles on the target host.\";
+      };
+
+      privilegeEscalationCommand = mkOption {
+        type = with types; listOf str;
+        default = [ \"sudo\" ];
+        description = \"The command to use to escalate privileges on the target host.\";
+      };
+
+      sshOptions = mkOption {
+        type = with types; listOf str;
+        default = [];
+        description = \"Extra options to pass to SSH.\";
+      };
+
+      keys = mkOption {
+        type = with types; attrsOf (submodule (import ./modules/key.nix));
+        default = {};
+        description = \"Secrets to upload to the host.\";
+      };
+    };
+  };
+
+  metaOptions = { config, lib, ... }: with lib; {
+    options.meta = {
+      nixpkgs = mkOption {
+        type = types.unspecified;
+        default = null;
+        description = \"The Nixpkgs to use.\";
+      };
+
+      nodeNixpkgs = mkOption {
+        type = with types; attrsOf types.unspecified;
+        default = {};
+        description = \"Per-node Nixpkgs to use.\";
+      };
+
+      specialArgs = mkOption {
+        type = types.attrs;
+        default = {};
+        description = \"Special arguments to pass to the modules.\";
+      };
+
+      nodeSpecialArgs = mkOption {
+        type = with types; attrsOf types.attrs;
+        default = {};
+        description = \"Per-node special arguments to pass to the modules.\";
+      };
+
+      machinesFile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        description = \"A file containing a list of remote builders.\";
+      };
+
+      allowApplyAll = mkOption {
+        type = types.bool;
+        default = false;
+        description = \"Whether to allow `colmena apply` without specifying nodes.\";
+      };
+    };
+  };
+}";
 const MODULES_NIX: &[u8] = include_bytes!("modules.nix");
 
 /// Static files required to evaluate a Hive configuration.

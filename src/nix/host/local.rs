@@ -8,7 +8,7 @@ use tokio::process::Command;
 use super::{key_uploader, CopyDirection, CopyOptions, Host};
 use crate::error::{ColmenaError, ColmenaResult};
 use crate::job::JobHandle;
-use crate::nix::{Goal, Key, NixFlags, Profile, StorePath, CURRENT_PROFILE, SYSTEM_PROFILE};
+use crate::nix::{Goal, Key, NixFlags, NodeConfig, Profile, StorePath, CURRENT_PROFILE, SYSTEM_PROFILE};
 use crate::util::{CommandExecution, CommandExt};
 
 /// The local machine running Colmena.
@@ -102,7 +102,7 @@ impl Host for Local {
         execution.run().await
     }
 
-    async fn get_current_system_profile(&mut self) -> ColmenaResult<Profile> {
+    async fn get_current_system_profile(&mut self, config: &NodeConfig) -> ColmenaResult<Profile> {
         let paths = Command::new("readlink")
             .args(["-e", CURRENT_PROFILE])
             .capture_output()
@@ -115,10 +115,13 @@ impl Host for Local {
             .to_string()
             .try_into()?;
 
-        Ok(Profile::from_store_path_unchecked(path))
+        Ok(Profile::from_store_path_unchecked(
+            path,
+            config.profile_type(),
+        ))
     }
 
-    async fn get_main_system_profile(&mut self) -> ColmenaResult<Profile> {
+    async fn get_main_system_profile(&mut self, config: &NodeConfig) -> ColmenaResult<Profile> {
         let paths = Command::new("sh")
             .args([
                 "-c",
@@ -137,7 +140,10 @@ impl Host for Local {
             .to_string()
             .try_into()?;
 
-        Ok(Profile::from_store_path_unchecked(path))
+        Ok(Profile::from_store_path_unchecked(
+            path,
+            config.profile_type(),
+        ))
     }
 
     fn set_job(&mut self, job: Option<JobHandle>) {

@@ -234,10 +234,13 @@ impl Deployment {
             unreachable!(); // some logic is screwed up
         }
 
-        let nodes: Vec<NodeName> = targets.keys().cloned().collect();
-        let expr = self.hive.eval_selected_expr(&nodes)?;
+        let node_configs = targets
+            .iter()
+            .map(|(name, target)| (name.clone(), target.config.clone()))
+            .collect();
+        let expr = self.hive.eval_selected_expr(&node_configs)?;
 
-        let job = parent.create_job(JobType::Evaluate, nodes.clone())?;
+        let job = parent.create_job(JobType::Evaluate, targets.keys().cloned().collect())?;
 
         let (futures, failed_attributes) = job
             .run(|job| async move {
@@ -362,8 +365,13 @@ impl Deployment {
             unreachable!(); // some logic is screwed up
         }
 
-        let nodes: Vec<NodeName> = chunk.keys().cloned().collect();
-        let profile_drvs = self.evaluate_nodes(parent.clone(), nodes.clone()).await?;
+        let node_configs = chunk
+            .iter()
+            .map(|(name, target)| (name.clone(), target.config.clone()))
+            .collect();
+        let profile_drvs = self
+            .evaluate_nodes(parent.clone(), node_configs)
+            .await?;
 
         let mut futures = Vec::new();
 
@@ -409,9 +417,9 @@ impl Deployment {
     async fn evaluate_nodes(
         self: &DeploymentHandle,
         parent: JobHandle,
-        nodes: Vec<NodeName>,
+        nodes: HashMap<NodeName, NodeConfig>,
     ) -> ColmenaResult<HashMap<NodeName, ProfileDerivation>> {
-        let job = parent.create_job(JobType::Evaluate, nodes.clone())?;
+        let job = parent.create_job(JobType::Evaluate, nodes.keys().cloned().collect())?;
 
         job.run_waiting(|job| async move {
             // Wait for eval limit
@@ -476,7 +484,9 @@ impl Deployment {
                 )
                 .await?;
 
-                let profile = profile_drv.realize_remote(host).await?;
+                let profile = profile_drv
+                    .realize_remote(host, target.config.profile_type())
+                    .await?;
 
                 job.success_with_message(format!("Built {:?} on target node", profile.as_path()))?;
                 Ok((target, profile))
@@ -502,13 +512,16 @@ impl Deployment {
         // Build system profile
         let build_job = parent.create_job(JobType::Build, nodes.clone())?;
         let arc_self = self.clone();
+        let profile_type = target.config.profile_type();
         let profile: Profile = build_job
             .run(|job| async move {
                 // FIXME: Remote builder?
                 let mut builder = LocalHost::new(arc_self.nix_options.clone()).upcast();
                 builder.set_job(Some(job.clone()));
 
-                let profile = profile_drv.realize(&mut builder).await?;
+                let profile = profile_drv
+                    .realize(&mut builder, profile_type)
+                    .await?;
 
                 job.success_with_message(format!("Built {:?}", profile.as_path()))?;
                 Ok(profile)
@@ -624,7 +637,9 @@ impl Deployment {
             if !target.config.replace_unknown_profiles {
                 job.message("Checking remote profile...".to_string())?;
 
-                let profile = host.get_main_system_profile().await?;
+                let profile = host
+                    .get_main_system_profile(&target.config)
+                    .await?;
 
                 if profile.as_store_path().exists() {
                     job.message("Remote profile known".to_string())?;
@@ -662,7 +677,7 @@ impl Deployment {
                     .wait_for_boot(true)
                     .new_profile(new_profile);
 
-                host.reboot(options).await?;
+                host.reboot(&target.config, options).await?;
 
                 Ok(target)
             })

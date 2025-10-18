@@ -26,7 +26,7 @@ let
   srcFiles = fs.difference ./. srcIgnored;
 in rustPlatform.buildRustPackage rec {
   pname = "colmena";
-  version = "0.5.0-pre";
+  version = "0.6.0-pre";
 
   src = fs.toSource {
     root = ./.;

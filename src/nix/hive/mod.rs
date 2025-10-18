@@ -25,8 +25,8 @@ use assets::Assets;
 
 /// The version of the Hive schema we are compatible with.
 ///
-/// Currently we are tied to one specific version.
-const HIVE_SCHEMA: &str = "v0.5";
+/// We support both v0.5 and v0.6 (which adds nix-darwin support).
+const HIVE_SCHEMA: &str = "v0.6";
 
 /// The snippet to be used for `nix eval --apply`.
 const FLAKE_APPLY_SNIPPET: &str = formatcp!(
@@ -416,7 +416,7 @@ impl Hive {
     /// concurrently with other processes (e.g., build and apply).
     pub async fn eval_selected(
         &self,
-        nodes: &[NodeName],
+        nodes: &HashMap<NodeName, NodeConfig>,
         job: Option<JobHandle>,
     ) -> ColmenaResult<HashMap<NodeName, ProfileDerivation>> {
         let nodes_expr = SerializedNixExpression::new(nodes);
@@ -440,7 +440,10 @@ impl Hive {
     }
 
     /// Returns the expression to evaluate selected nodes.
-    pub fn eval_selected_expr(&self, nodes: &[NodeName]) -> ColmenaResult<impl NixExpression + '_> {
+    pub fn eval_selected_expr(
+        &self,
+        nodes: &HashMap<NodeName, NodeConfig>,
+    ) -> ColmenaResult<impl NixExpression + '_> {
         let nodes_expr = SerializedNixExpression::new(nodes);
 
         Ok(EvalSelectedExpression {
