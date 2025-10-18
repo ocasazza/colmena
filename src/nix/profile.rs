@@ -2,39 +2,82 @@ use std::convert::TryFrom;
 use std::path::Path;
 use std::process::Stdio;
 
+use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
-use super::{BuildResult, ColmenaError, ColmenaResult, Goal, StoreDerivation, StorePath};
+use super::{
+    BuildResult, ColmenaError, ColmenaResult, Goal, StoreDerivation, StorePath,
+};
+
+/// A Nix profile type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProfileType {
+    /// A NixOS profile.
+    NixOS,
+    /// A nix-darwin profile.
+    NixDarwin,
+}
+
+impl Default for ProfileType {
+    fn default() -> Self {
+        Self::NixOS
+    }
+}
 
 pub type ProfileDerivation = StoreDerivation<Profile>;
 
 /// A NixOS system profile.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Profile(StorePath);
+pub struct Profile {
+    /// The store path to the profile.
+    path: StorePath,
+
+    /// The type of the profile.
+    profile_type: ProfileType,
+}
 
 impl Profile {
-    pub fn from_store_path(path: StorePath) -> ColmenaResult<Self> {
-        if !path.is_dir() || !path.join("bin/switch-to-configuration").exists() {
+    pub fn from_store_path(path: StorePath, profile_type: ProfileType) -> ColmenaResult<Self> {
+        let activation_script = match profile_type {
+            ProfileType::NixOS => "bin/switch-to-configuration",
+            ProfileType::NixDarwin => "activate",
+        };
+
+        if !path.is_dir() || !path.join(activation_script).exists() {
             return Err(ColmenaError::InvalidProfile);
         }
 
         if path.to_str().is_none() {
             Err(ColmenaError::InvalidProfile)
         } else {
-            Ok(Self(path))
+            Ok(Self { path, profile_type })
         }
     }
 
     /// Returns the command to activate this profile.
     pub fn activation_command(&self, goal: Goal) -> Option<Vec<String>> {
         if let Some(goal) = goal.as_str() {
-            let path = self.as_path().join("bin/switch-to-configuration");
-            let switch_to_configuration = path
-                .to_str()
-                .expect("The string should be UTF-8 valid")
-                .to_string();
-
-            Some(vec![switch_to_configuration, goal.to_string()])
+            match self.profile_type {
+                ProfileType::NixOS => {
+                    let path = self.as_path().join("bin/switch-to-configuration");
+                    let activation_command = path
+                        .to_str()
+                        .expect("The string should be UTF-8 valid")
+                        .to_string();
+                    Some(vec![activation_command, goal.to_string()])
+                }
+                ProfileType::NixDarwin => {
+                    // For darwin, use the activate script directly instead of darwin-rebuild
+                    // to avoid NIX_PATH requirements
+                    let path = self.as_path().join("activate");
+                    let activation_command = path
+                        .to_str()
+                        .expect("The string should be UTF-8 valid")
+                        .to_string();
+                    Some(vec![activation_command])
+                }
+            }
         } else {
             None
         }
@@ -42,12 +85,12 @@ impl Profile {
 
     /// Returns the store path.
     pub fn as_store_path(&self) -> &StorePath {
-        &self.0
+        &self.path
     }
 
     /// Returns the raw store path.
     pub fn as_path(&self) -> &Path {
-        self.0.as_path()
+        self.path.as_path()
     }
 
     /// Create a GC root for this profile.
@@ -70,8 +113,8 @@ impl Profile {
         Ok(())
     }
 
-    pub(super) fn from_store_path_unchecked(path: StorePath) -> Self {
-        Self(path)
+    pub(super) fn from_store_path_unchecked(path: StorePath, profile_type: ProfileType) -> Self {
+        Self { path, profile_type }
     }
 }
 
@@ -95,6 +138,9 @@ impl TryFrom<BuildResult<Profile>> for Profile {
 
         let path = paths.iter().next().unwrap().to_owned();
 
-        Ok(Self::from_store_path_unchecked(path))
+        Ok(Self::from_store_path_unchecked(
+            path,
+            result.profile_type(),
+        ))
     }
 }

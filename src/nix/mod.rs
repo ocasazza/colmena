@@ -23,7 +23,7 @@ pub mod key;
 pub use key::Key;
 
 pub mod profile;
-pub use profile::{Profile, ProfileDerivation};
+pub use profile::{Profile, ProfileDerivation, ProfileType};
 
 pub mod deployment;
 pub use deployment::Goal;
@@ -53,8 +53,11 @@ pub const CURRENT_PROFILE: &str = "/run/current-system";
 #[serde(transparent)]
 pub struct NodeName(#[serde(deserialize_with = "NodeName::deserialize")] String);
 
-#[derive(Debug, Clone, Validate, Deserialize)]
+#[derive(Debug, Clone, Validate, Serialize, Deserialize)]
 pub struct NodeConfig {
+    #[serde(rename = "profileType", default)]
+    profile_type: ProfileType,
+
     #[serde(rename = "targetHost")]
     target_host: Option<String>,
 
@@ -192,6 +195,10 @@ impl NodeConfig {
 
             host
         })
+    }
+
+    pub fn profile_type(&self) -> ProfileType {
+        self.profile_type
     }
 }
 

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
-use super::Host;
+use super::{Host, ProfileType};
 use crate::error::{ColmenaError, ColmenaResult};
 use crate::util::CommandExt;
 
@@ -25,6 +25,7 @@ pub struct StoreDerivation<T: TryFrom<BuildResult<T>>> {
 /// Results of a build/realization.
 pub struct BuildResult<T: TryFrom<BuildResult<T>>> {
     results: Vec<StorePath>,
+    profile_type: ProfileType,
     _derivation: PhantomData<T>,
 }
 
@@ -119,22 +120,32 @@ impl<T: TryFrom<BuildResult<T>>> StoreDerivation<T> {
 
 impl<T: TryFrom<BuildResult<T>, Error = ColmenaError>> StoreDerivation<T> {
     /// Builds the store derivation on a host, resulting in a T.
-    pub async fn realize(&self, host: &mut Box<dyn Host>) -> ColmenaResult<T> {
+    pub async fn realize(
+        &self,
+        host: &mut Box<dyn Host>,
+        profile_type: ProfileType,
+    ) -> ColmenaResult<T> {
         let paths: Vec<StorePath> = host.realize(&self.path).await?;
 
         let result = BuildResult {
             results: paths,
+            profile_type,
             _derivation: PhantomData,
         };
         result.try_into()
     }
 
     /// Builds the store derivation on a host without copying the results back.
-    pub async fn realize_remote(&self, host: &mut Box<dyn Host>) -> ColmenaResult<T> {
+    pub async fn realize_remote(
+        &self,
+        host: &mut Box<dyn Host>,
+        profile_type: ProfileType,
+    ) -> ColmenaResult<T> {
         let paths: Vec<StorePath> = host.realize_remote(&self.path).await?;
 
         let result = BuildResult {
             results: paths,
+            profile_type,
             _derivation: PhantomData,
         };
         result.try_into()
@@ -150,5 +161,9 @@ impl<T: TryFrom<BuildResult<T>>> fmt::Display for StoreDerivation<T> {
 impl<T: TryFrom<BuildResult<T>, Error = ColmenaError>> BuildResult<T> {
     pub fn paths(&self) -> &[StorePath] {
         self.results.as_slice()
+    }
+
+    pub fn profile_type(&self) -> ProfileType {
+        self.profile_type
     }
 }

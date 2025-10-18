@@ -119,7 +119,16 @@ let
       if hasAttr name hive.meta.nodeNixpkgs
       then mkNixpkgs "meta.nodeNixpkgs.${name}" hive.meta.nodeNixpkgs.${name}
       else nixpkgs;
-    evalConfig = import (npkgs.path + "/nixos/lib/eval-config.nix");
+    evalConfig =
+      let
+        profileType = (lib.modules.evalModules {
+          modules = [ colmenaOptions.deploymentOptions ] ++ configs;
+        }).config.deployment.profileType;
+      in
+        if profileType == "nix-darwin" then
+          (import (npkgs.path + "/../nix-darwin/eval-config.nix")).eval-config
+        else
+          import (npkgs.path + "/nixos/lib/eval-config.nix");
 
     # Here we need to merge the configurations in meta.nixpkgs
     # and in machine config.
@@ -181,7 +190,7 @@ let
 
 in rec {
   # Exported attributes
-  __schema = "v0.5";
+  __schema = "v0.6";
 
   nodes = listToAttrs (map (name: { inherit name; value = evalNode name (configsFor name); }) nodeNames);
   toplevel =         lib.mapAttrs (_: v: v.config.system.build.toplevel) nodes;
