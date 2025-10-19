@@ -313,12 +313,42 @@ mod tests {
 
     #[test]
     #[timeout(30000)]
-    #[ignore]
     fn test_json_global_error() {
-        // #[ignore]: nix-eval-jobs locks up when run in parallel to other tests
-        // cannot consistently reproduce and more investigation is needed
+        // Replaces the real `nix-eval-jobs` binary with a small deterministic
+        // script to avoid locking when running tests in parallel.
+        //
+        // We emulate the stdout lines that `nix-eval-jobs` would produce:
+        // 1) A derivation line for attribute "a"
+        // 2) A global error line containing "No such file or directory"
+        use std::fs::File;
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
 
-        let evaluator = NixEvalJobs::default();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script_path = dir.path().join("fake-nix-eval-jobs.sh");
+        let mut f = File::create(&script_path).expect("create script");
+        writeln!(f, "#!/bin/sh").unwrap();
+        writeln!(
+            f,
+            "echo '{{\"attr\":\"a\",\"drvPath\":\"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-hello.drv\"}}'"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "echo '{{\"error\":\"No such file or directory: /sys/nonexistentfile\"}}'"
+        )
+        .unwrap();
+        writeln!(f, "exit 0").unwrap();
+
+        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).unwrap();
+
+        let mut evaluator = NixEvalJobs::default();
+        // Use our fake executable and limit workers to 1 to keep behavior stable.
+        evaluator.executable = script_path;
+        evaluator.set_eval_limit(1);
+
         let expr = r#"with import <nixpkgs> {}; { a = pkgs.hello; b = pkgs.writeText "x" (import /sys/nonexistentfile); }"#.to_string();
 
         block_on(async move {

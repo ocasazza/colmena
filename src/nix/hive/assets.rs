@@ -15,6 +15,22 @@ use super::{Flake, HivePath};
 use crate::error::ColmenaResult;
 use crate::nix::flake::lock_flake_quiet;
 
+/*
+Why a synthetic "assets flake"?
+
+- In DirectFlakeEval mode (nix eval --apply on a flake), we cannot import arbitrary files
+  from the running binary or a temp directory. Nix expects proper flake inputs.
+- We embed eval.nix, options.nix, modules.nix into the binary and write them to a temp dir.
+- We then synthesize a minimal flake.nix that:
+    * Declares the user's Hive as an input (inputs.hive.url = "%hive%")
+    * Imports the embedded eval/options/modules
+    * Exposes processFlake = eval { rawFlake = hive; hermetic = true; ... }
+- We lock that flake and reference it via builtins.getFlake, making evaluation hermetic and
+  reproducible while remaining compatible with flake evaluation rules.
+
+For legacy (non-flake) evaluation we can directly import the embedded files by path; see
+Assets::get_base_expression() for that branch.
+*/
 const FLAKE_NIX: &str = "{
   description = \"Colmena Asset Flake\";
   inputs.hive.url = \"%hive%\";
@@ -34,105 +50,7 @@ const FLAKE_NIX: &str = "{
 }
 ";
 const EVAL_NIX: &[u8] = include_bytes!("eval.nix");
-const OPTIONS_NIX: &[u8] = b"{
-  deploymentOptions = { config, lib, ... }: with lib; {
-    options.deployment = {
-      profileType = mkOption {
-        type = types.enum [ \"nixos\" \"nix-darwin\" ];
-        default = \"nixos\";
-        description = \"Type of the profile to build and deploy.\";
-      };
-
-      targetHost = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = \"The host to deploy to.\";
-      };
-
-      targetUser = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        description = \"The user to use to connect to the host.\";
-      };
-
-      targetPort = mkOption {
-        type = types.nullOr types.port;
-        default = null;
-        description = \"The port to use to connect to the host.\";
-      };
-
-      buildOnTarget = mkOption {
-        type = types.bool;
-        default = false;
-        description = \"Whether to build the profile on the target host.\";
-      };
-
-      replaceUnknownProfiles = mkOption {
-        type = types.bool;
-        default = false;
-        description = \"Whether to replace unknown profiles on the target host.\";
-      };
-
-      privilegeEscalationCommand = mkOption {
-        type = with types; listOf str;
-        default = [ \"sudo\" ];
-        description = \"The command to use to escalate privileges on the target host.\";
-      };
-
-      sshOptions = mkOption {
-        type = with types; listOf str;
-        default = [];
-        description = \"Extra options to pass to SSH.\";
-      };
-
-      keys = mkOption {
-        type = with types; attrsOf (submodule (import ./modules/key.nix));
-        default = {};
-        description = \"Secrets to upload to the host.\";
-      };
-    };
-  };
-
-  metaOptions = { config, lib, ... }: with lib; {
-    options.meta = {
-      nixpkgs = mkOption {
-        type = types.unspecified;
-        default = null;
-        description = \"The Nixpkgs to use.\";
-      };
-
-      nodeNixpkgs = mkOption {
-        type = with types; attrsOf types.unspecified;
-        default = {};
-        description = \"Per-node Nixpkgs to use.\";
-      };
-
-      specialArgs = mkOption {
-        type = types.attrs;
-        default = {};
-        description = \"Special arguments to pass to the modules.\";
-      };
-
-      nodeSpecialArgs = mkOption {
-        type = with types; attrsOf types.attrs;
-        default = {};
-        description = \"Per-node special arguments to pass to the modules.\";
-      };
-
-      machinesFile = mkOption {
-        type = types.nullOr types.path;
-        default = null;
-        description = \"A file containing a list of remote builders.\";
-      };
-
-      allowApplyAll = mkOption {
-        type = types.bool;
-        default = false;
-        description = \"Whether to allow `colmena apply` without specifying nodes.\";
-      };
-    };
-  };
-}";
+const OPTIONS_NIX: &[u8] = include_bytes!("options.nix");
 const MODULES_NIX: &[u8] = include_bytes!("modules.nix");
 
 /// Static files required to evaluate a Hive configuration.

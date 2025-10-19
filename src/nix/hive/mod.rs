@@ -352,19 +352,27 @@ impl Hive {
 
     /// Retrieve deployment info for all nodes.
     pub async fn deployment_info(&self) -> ColmenaResult<HashMap<NodeName, NodeConfig>> {
-        let configs: HashMap<NodeName, NodeConfig> = self
+        // Deserialize using String keys first to avoid serde map-key issues,
+        // then validate and convert to NodeName.
+        let raw: HashMap<String, NodeConfig> = self
             .nix_instantiate("hive.deploymentConfig")
             .eval_with_builders()
             .await?
             .capture_json()
             .await?;
 
-        for config in configs.values() {
+        let mut configs: HashMap<NodeName, NodeConfig> = HashMap::new();
+        for (name, config) in raw {
+            // Validate node config and keys
             config.validate()?;
             for key in config.keys.values() {
                 key.validate()?;
             }
+
+            let node_name = NodeName::new(name)?;
+            configs.insert(node_name, config);
         }
+
         Ok(configs)
     }
 
@@ -387,9 +395,13 @@ impl Hive {
         &self,
         nodes: &[NodeName],
     ) -> ColmenaResult<HashMap<NodeName, NodeConfig>> {
-        let nodes_expr = SerializedNixExpression::new(nodes);
+        // evalSelected* expects a list of node names
+        let names: Vec<NodeName> = nodes.to_vec();
+        let nodes_expr = SerializedNixExpression::new(names);
 
-        let configs: HashMap<NodeName, NodeConfig> = self
+        // Deserialize using String keys first to avoid serde map-key issues,
+        // then validate and convert to NodeName.
+        let raw: HashMap<String, NodeConfig> = self
             .nix_instantiate(&format!(
                 "hive.deploymentConfigSelected {}",
                 nodes_expr.expression()
@@ -399,11 +411,16 @@ impl Hive {
             .capture_json()
             .await?;
 
-        for config in configs.values() {
+        let mut configs: HashMap<NodeName, NodeConfig> = HashMap::new();
+        for (name, config) in raw {
+            // Validate node config and keys
             config.validate()?;
             for key in config.keys.values() {
                 key.validate()?;
             }
+
+            let node_name = NodeName::new(name)?;
+            configs.insert(node_name, config);
         }
 
         Ok(configs)
@@ -419,19 +436,31 @@ impl Hive {
         nodes: &HashMap<NodeName, NodeConfig>,
         job: Option<JobHandle>,
     ) -> ColmenaResult<HashMap<NodeName, ProfileDerivation>> {
-        let nodes_expr = SerializedNixExpression::new(nodes);
+        // evalSelected expects a list of node names, not the full config set
+        let names: Vec<NodeName> = nodes.keys().cloned().collect();
+        let nodes_expr = SerializedNixExpression::new(names);
 
         let expr = format!("hive.evalSelectedDrvPaths {}", nodes_expr.expression());
 
         let command = self.nix_instantiate(&expr).eval_with_builders().await?;
         let mut execution = CommandExecution::new(command);
         execution.set_job(job);
-        execution.set_hide_stdout(true);
+        // Show Nix stdout during tests to diagnose evaluation failures
+        execution.set_hide_stdout(false);
 
-        execution
+        let result = execution
             .capture_json::<HashMap<NodeName, StorePath>>()
-            .await?
-            .into_iter()
+            .await;
+
+        let map = match result {
+            Ok(map) => map,
+            Err(e) => {
+                eprintln!("eval_selected capture_json error: {:?}", e);
+                return Err(e);
+            }
+        };
+
+        map.into_iter()
             .map(|(name, path)| {
                 let path = path.into_derivation()?;
                 Ok((name, path))
@@ -444,7 +473,8 @@ impl Hive {
         &self,
         nodes: &HashMap<NodeName, NodeConfig>,
     ) -> ColmenaResult<impl NixExpression + '_> {
-        let nodes_expr = SerializedNixExpression::new(nodes);
+        let names: Vec<NodeName> = nodes.keys().cloned().collect();
+        let nodes_expr = SerializedNixExpression::new(names);
 
         Ok(EvalSelectedExpression {
             hive: self,
