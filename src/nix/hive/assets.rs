@@ -15,40 +15,7 @@ use super::{Flake, HivePath};
 use crate::error::ColmenaResult;
 use crate::nix::flake::lock_flake_quiet;
 
-/*
-Why a synthetic "assets flake"?
-
-- In DirectFlakeEval mode (nix eval --apply on a flake), we cannot import arbitrary files
-  from the running binary or a temp directory. Nix expects proper flake inputs.
-- We embed eval.nix, options.nix, modules.nix into the binary and write them to a temp dir.
-- We then synthesize a minimal flake.nix that:
-    * Declares the user's Hive as an input (inputs.hive.url = "%hive%")
-    * Imports the embedded eval/options/modules
-    * Exposes processFlake = eval { rawFlake = hive; hermetic = true; ... }
-- We lock that flake and reference it via builtins.getFlake, making evaluation hermetic and
-  reproducible while remaining compatible with flake evaluation rules.
-
-For legacy (non-flake) evaluation we can directly import the embedded files by path; see
-Assets::get_base_expression() for that branch.
-*/
-const FLAKE_NIX: &str = "{
-  description = \"Colmena Asset Flake\";
-  inputs.hive.url = \"%hive%\";
-  outputs = { self, hive }:
-    let
-      eval = import ./eval.nix;
-      options = import ./options.nix;
-      modules = import ./modules.nix;
-    in {
-      processFlake = eval {
-        rawFlake = hive;
-        hermetic = true;
-        colmenaOptions = options;
-        colmenaModules = modules;
-      };
-    };
-}
-";
+const FLAKE_NIX: &[u8] = include_bytes!("flake.nix");
 const EVAL_NIX: &[u8] = include_bytes!("eval.nix");
 const OPTIONS_NIX: &[u8] = include_bytes!("options.nix");
 const MODULES_NIX: &[u8] = include_bytes!("modules.nix");
@@ -78,7 +45,7 @@ impl Assets {
 
         if let HivePath::Flake(hive_flake) = &hive_path {
             // Emit a temporary flake, then resolve the locked URI
-            let flake_nix = FLAKE_NIX.replace("%hive%", hive_flake.locked_uri());
+            let flake_nix = String::from_utf8_lossy(FLAKE_NIX).replace("%hive%", hive_flake.locked_uri());
             create_file(&temp_dir, "flake.nix", false, flake_nix.as_bytes())?;
 
             // We explicitly specify `path:` instead of letting Nix resolve
