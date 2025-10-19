@@ -96,6 +96,13 @@ with builtins; rec {
   in {
     options = {
       deployment = {
+        profileType = lib.mkOption {
+          description = ''
+            Type of the profile to build and deploy.
+          '';
+          type = types.enum [ "nixos" "nix-darwin" ];
+          default = "nixos";
+        };
         targetHost = lib.mkOption {
           description = ''
             The target SSH node for deployment.

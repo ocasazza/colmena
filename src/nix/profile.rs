@@ -11,11 +11,12 @@ use super::{
 
 /// A Nix profile type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
 pub enum ProfileType {
     /// A NixOS profile.
+    #[serde(rename = "nixos")]
     NixOS,
     /// A nix-darwin profile.
+    #[serde(rename = "nix-darwin")]
     NixDarwin,
 }
 
@@ -142,5 +143,34 @@ impl TryFrom<BuildResult<Profile>> for Profile {
             path,
             result.profile_type(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nix::Goal;
+
+    #[test]
+    fn test_activation_command_nix_darwin() {
+        let sp = StorePath::try_from(String::from("/nix/store/fake-darwin-profile")).unwrap();
+        let profile = Profile::from_store_path_unchecked(sp, ProfileType::NixDarwin);
+
+        // For nix-darwin, activation_command should return the activate script only.
+        let cmd = profile.activation_command(Goal::Switch).unwrap();
+        assert_eq!(cmd.len(), 1);
+        assert!(cmd[0].ends_with("activate"));
+    }
+
+    #[test]
+    fn test_activation_command_nixos() {
+        let sp = StorePath::try_from(String::from("/nix/store/fake-nixos-profile")).unwrap();
+        let profile = Profile::from_store_path_unchecked(sp, ProfileType::NixOS);
+
+        // For NixOS, activation_command should point to bin/switch-to-configuration and include the goal.
+        let cmd = profile.activation_command(Goal::Boot).unwrap();
+        assert_eq!(cmd.len(), 2);
+        assert!(cmd[0].ends_with("bin/switch-to-configuration"));
+        assert_eq!(cmd[1], "boot");
     }
 }

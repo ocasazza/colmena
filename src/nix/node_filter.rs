@@ -235,8 +235,11 @@ mod tests {
 
     #[test]
     fn test_filter_node_configs() {
+        use crate::nix::ProfileType;
+
         // TODO: Better way to mock
         let template = NodeConfig {
+            profile_type: ProfileType::NixOS,
             tags: vec![],
             target_host: None,
             target_user: None,

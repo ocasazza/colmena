@@ -116,19 +116,36 @@ let
 
   evalNode = name: configs: let
     npkgs =
-      if hasAttr name hive.meta.nodeNixpkgs
-      then mkNixpkgs "meta.nodeNixpkgs.${name}" hive.meta.nodeNixpkgs.${name}
+      if uncheckedUserMeta ? nodeNixpkgs && hasAttr name uncheckedUserMeta.nodeNixpkgs
+      then mkNixpkgs "meta.nodeNixpkgs.${name}" uncheckedUserMeta.nodeNixpkgs.${name}
       else nixpkgs;
-    evalConfig =
+    # Determine profileType by checking if it's explicitly set in any config
+    # We can't do a full evaluation here as it might cause infinite recursion
+    # when configs reference 'nodes'
+    getProfileType = configs:
       let
-        profileType = (lib.modules.evalModules {
-          modules = [ colmenaOptions.deploymentOptions ] ++ configs;
-        }).config.deployment.profileType;
+        # Check each config for an explicit profileType setting
+        checkConfig = cfg:
+          if builtins.isAttrs cfg && cfg ? deployment && cfg.deployment ? profileType
+          then cfg.deployment.profileType
+          else null;
+        explicitTypes = builtins.filter (t: t != null) (map checkConfig configs);
       in
-        if profileType == "nix-darwin" then
-          (import (npkgs.path + "/../nix-darwin/eval-config.nix")).eval-config
-        else
-          import (npkgs.path + "/nixos/lib/eval-config.nix");
+        if builtins.length explicitTypes > 0
+        then builtins.head explicitTypes
+        else "nixos";  # default
+
+    profileType = getProfileType configs;
+
+    evalConfig =
+      if profileType == "nix-darwin" then
+        let
+          ndPath = npkgs.path + "/../nix-darwin/eval-config.nix";
+        in
+          if builtins.pathExists ndPath then (import ndPath).eval-config
+          else import (npkgs.path + "/nixos/lib/eval-config.nix")
+      else
+        import (npkgs.path + "/nixos/lib/eval-config.nix");
 
     # Here we need to merge the configurations in meta.nixpkgs
     # and in machine config.
@@ -150,7 +167,10 @@ let
         "The following Nixpkgs configuration keys set in meta.nixpkgs will be ignored: ${toString remainingKeys}";
     };
   in evalConfig {
-    inherit (npkgs) system;
+    system =
+      if profileType == "nix-darwin" then npkgs.system
+      else if builtins.match ".*darwin.*" npkgs.system != null then "x86_64-linux"
+      else npkgs.system;
 
     modules = [
       nixpkgsModule
@@ -163,7 +183,7 @@ let
     specialArgs = {
       inherit name;
       nodes = uncheckedNodes;
-    } // hive.meta.specialArgs // (hive.meta.nodeSpecialArgs.${name} or {});
+    } // (uncheckedUserMeta.specialArgs or {}) // (uncheckedUserMeta.nodeSpecialArgs.${name} or {});
   };
 
   nodeNames = filter (name: ! elem name reservedNames) (attrNames hive);
@@ -188,6 +208,15 @@ let
     "allowApplyAll"
   ];
 
+  # Extract only the meta config keys we need, avoiding evaluation of nixpkgs
+  # We manually apply defaults to avoid triggering module system evaluation
+  metaConfigRaw = {
+    name = uncheckedUserMeta.name or "hive";
+    description = uncheckedUserMeta.description or "A Colmena Hive";
+    machinesFile = uncheckedUserMeta.machinesFile or null;
+    allowApplyAll = uncheckedUserMeta.allowApplyAll or true;
+  };
+
 in rec {
   # Exported attributes
   __schema = "v0.6";
@@ -198,6 +227,6 @@ in rec {
   deploymentConfigSelected = names: lib.filterAttrs (name: _: elem name names) deploymentConfig;
   evalSelected =             names: lib.filterAttrs (name: _: elem name names) toplevel;
   evalSelectedDrvPaths =     names: lib.mapAttrs    (_: v: v.drvPath)          (evalSelected names);
-  metaConfig = lib.filterAttrs (n: v: elem n metaConfigKeys) hive.meta;
+  metaConfig = metaConfigRaw;
   introspect = f: f { inherit lib; pkgs = nixpkgs; nodes = uncheckedNodes; };
 }

@@ -69,14 +69,16 @@ impl TempHive {
     /// Asserts that the specified nodes can be fully evaluated.
     pub fn eval_success(text: &str, nodes: Vec<NodeName>) {
         let hive = Self::new(text);
-        let profiles = block_on(hive.eval_selected(&nodes, None));
+        let node_configs = block_on(hive.deployment_info_selected(&nodes)).unwrap();
+        let profiles = block_on(hive.eval_selected(&node_configs, None));
         assert!(profiles.is_ok());
     }
 
     /// Asserts that the specified nodes will fail to evaluate.
     pub fn eval_failure(text: &str, nodes: Vec<NodeName>) {
         let hive = Self::new(text);
-        let profiles = block_on(hive.eval_selected(&nodes, None));
+        let node_configs = block_on(hive.deployment_info_selected(&nodes)).unwrap();
+        let profiles = block_on(hive.eval_selected(&node_configs, None));
         assert!(profiles.is_err());
     }
 }
@@ -672,4 +674,22 @@ fn test_hive_get_meta() {
     eprintln!("{:?}", eval);
 
     assert!(!eval.allow_apply_all);
+}
+
+#[test]
+fn test_parse_profile_type_nix_darwin() {
+    // Ensure deployment.profileType is parsed as nix-darwin
+    let hive = TempHive::new(
+        r#"
+      {
+        host-darwin = {
+          deployment.profileType = "nix-darwin";
+        };
+      }
+    "#,
+    );
+
+    let nodes = block_on(hive.deployment_info()).unwrap();
+    let node = nodes.get(&node!("host-darwin")).expect("node present");
+    assert_eq!(node.profile_type(), crate::nix::ProfileType::NixDarwin);
 }
