@@ -434,24 +434,30 @@ impl Ssh {
 
     /// Activates Home Manager for nix-darwin systems.
     ///
-    /// nix-darwin's Home Manager module builds the configuration as part of the system
-    /// but doesn't create a user profile generation. This method:
-    /// 1. Extracts the Home Manager configuration from the system profile
-    /// 2. Builds it into a proper Home Manager generation
-    /// 3. Links and activates it for each configured user
+    /// nix-darwin's Home Manager module doesn't create generations automatically.
+    /// This method builds the Home Manager configuration from the flake and activates it.
     async fn activate_darwin_home_manager(&mut self, profile: &Profile) -> ColmenaResult<()> {
         if let Some(job) = &self.job {
             job.message("Activating Home Manager".to_string())?;
         }
 
-        // Script to build and activate Home Manager from nix-darwin's configuration
-        let hm_script = format!(
-            r#"
+        // Script to build and activate Home Manager from the flake
+        let hm_script = r#"
 set -euo pipefail
 
-SYSTEM_PROFILE="{}"
+# Get the hostname for the flake attribute
+HOSTNAME=$(hostname -s)
 
-# Find all users with Home Manager configurations in the system
+# Find the flake that built this system
+# Look for the flake source in the system profile
+FLAKE_SOURCE=$(nix-store -q --references /nix/var/nix/profiles/system | grep -E 'source$' | head -n1 || echo "")
+
+if [ -z "$FLAKE_SOURCE" ]; then
+    echo "Could not find flake source in system profile"
+    exit 0
+fi
+
+# For each user, try to build and activate their Home Manager configuration
 for user_home in /Users/*; do
     username=$(basename "$user_home")
 
@@ -464,41 +470,33 @@ for user_home in /Users/*; do
         continue
     fi
 
-    # Check if this user has a Home Manager configuration in the system
-    # The nix-darwin HM module creates a homeConfigurations output
-    hm_config_attr="darwinConfigurations.$(hostname -s).config.home-manager.users.$username"
+    # Try to build the Home Manager configuration from the flake
+    # The attribute path is: darwinConfigurations.<hostname>.config.home-manager.users.<username>.home.activationPackage
+    HM_ATTR="darwinConfigurations.${HOSTNAME}.config.home-manager.users.${username}.home.activationPackage"
 
-    # Try to build the Home Manager generation from the system's flake
-    # We need to extract the flake reference from the system profile
-    system_flake=$(nix-store -q --references "$SYSTEM_PROFILE" | grep -E '(flake-registry|flake\.lock)' | head -n1 || echo "")
+    echo "Building Home Manager for $username..."
+    HM_PACKAGE=$(nix build --no-link --print-out-paths "$FLAKE_SOURCE#$HM_ATTR" 2>&1 || echo "")
 
-    if [ -z "$system_flake" ]; then
-        # No flake found, try alternative approach: build HM config directly from system
-        # The system profile contains the HM configuration, we just need to activate it
+    if [ -n "$HM_PACKAGE" ] && [ -d "$HM_PACKAGE" ]; then
+        echo "Activating Home Manager for $username..."
 
-        # Look for home-manager activation script in system closure
-        hm_activate=$(nix-store -qR "$SYSTEM_PROFILE" | grep -E "home-manager.*activate$" | grep -v "home-manager-path" | head -n1 || echo "")
+        # Create profile directory
+        sudo -u "$username" mkdir -p "$user_home/.local/state/nix/profiles"
 
-        if [ -n "$hm_activate" ] && [ -x "$hm_activate" ]; then
-            # Create profile directory
-            sudo -u "$username" mkdir -p "$user_home/.local/state/nix/profiles"
+        # Link the generation
+        sudo -u "$username" nix-env --profile "$user_home/.local/state/nix/profiles/home-manager" --set "$HM_PACKAGE" 2>&1 || true
 
-            # Get the home-manager generation (parent directory of activate script)
-            hm_generation=$(dirname "$hm_activate")
-
-            # Link the generation to the user's profile
-            sudo -u "$username" nix-env --profile "$user_home/.local/state/nix/profiles/home-manager" --set "$hm_generation" 2>&1 || true
-
-            # Activate it
-            sudo -u "$username" "$hm_activate" 2>&1 || true
+        # Activate it
+        if [ -x "$HM_PACKAGE/activate" ]; then
+            sudo -u "$username" "$HM_PACKAGE/activate" 2>&1 || true
         fi
+    else
+        echo "No Home Manager configuration found for $username"
     fi
 done
-"#,
-            profile.as_path().to_str().unwrap()
-        );
+"#;
 
-        let command = self.ssh(&["sh", "-c", &hm_script]);
+        let command = self.ssh(&["sh", "-c", hm_script]);
 
         // Run the script, but don't fail the deployment if HM activation fails
         match self.run_command(command).await {
