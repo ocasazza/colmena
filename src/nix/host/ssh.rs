@@ -104,7 +104,15 @@ impl Host for Ssh {
         let activation_command = profile.activation_command(goal).unwrap();
         let v: Vec<&str> = activation_command.iter().map(|s| &**s).collect();
         let command = self.ssh(&v);
-        self.run_command(command).await
+        self.run_command(command).await?;
+
+        // For nix-darwin, also activate Home Manager as the user
+        if profile.profile_type() == crate::nix::ProfileType::NixDarwin {
+            let activate_user = self.ssh(&["/nix/var/nix/profiles/system/activate-user"]);
+            self.run_command(activate_user).await?;
+        }
+
+        Ok(())
     }
 
     async fn get_current_system_profile(&mut self, config: &NodeConfig) -> ColmenaResult<Profile> {
