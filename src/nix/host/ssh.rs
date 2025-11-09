@@ -494,9 +494,9 @@ for user_home in /Users/*; do
         echo "No Home Manager configuration found for $username"
     fi
 done
-"#;
+"#.to_string();
 
-        let command = self.ssh(&["sh", "-c", hm_script]);
+        let command = self.ssh(&["sh", "-c", &hm_script]);
 
         // Run the script, but don't fail the deployment if HM activation fails
         match self.run_command(command).await {
