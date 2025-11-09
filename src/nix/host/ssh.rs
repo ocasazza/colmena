@@ -106,10 +106,27 @@ impl Host for Ssh {
         let command = self.ssh(&v);
         self.run_command(command).await?;
 
-        // For nix-darwin, also activate Home Manager as the user
+        // For nix-darwin, also activate Home Manager if present
         if profile.profile_type() == crate::nix::ProfileType::NixDarwin {
-            let activate_user = self.ssh(&["/nix/var/nix/profiles/system/activate-user"]);
-            self.run_command(activate_user).await?;
+            // Get the console user (the logged-in user)
+            let username_result = self
+                .ssh(&["stat", "-f", "%Su", "/dev/console"])
+                .capture_output()
+                .await;
+            
+            if let Ok(username_output) = username_result {
+                if let Some(username) = username_output.lines().next() {
+                    let username = username.trim();
+                    
+                    // Run Home Manager activation as the user
+                    let hm_activate = format!(
+                        "sudo -u {} bash -c 'if [ -x ~/.local/state/nix/profiles/home-manager/activate ]; then ~/.local/state/nix/profiles/home-manager/activate; fi' 2>&1 || true",
+                        username
+                    );
+                    let hm_cmd = self.ssh(&["sh", "-c", &hm_activate]);
+                    let _ = self.run_command(hm_cmd).await; // Ignore errors
+                }
+            }
         }
 
         Ok(())
