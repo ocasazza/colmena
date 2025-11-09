@@ -69,12 +69,14 @@ impl Profile {
                     Some(vec![activation_command, goal.to_string()])
                 }
                 ProfileType::NixDarwin => {
-                    // Use darwin-rebuild activate to properly activate both system and Home Manager
-                    let darwin_rebuild = self.as_path().join("sw/bin/darwin-rebuild");
-                    let rebuild_cmd = darwin_rebuild.to_str()
+                    // For darwin, use the activate script directly instead of darwin-rebuild
+                    // to avoid NIX_PATH requirements
+                    let path = self.as_path().join("activate");
+                    let activation_command = path
+                        .to_str()
                         .expect("The string should be UTF-8 valid")
                         .to_string();
-                    Some(vec![rebuild_cmd, "activate".to_string()])
+                    Some(vec![activation_command])
                 }
             }
         } else {
@@ -154,11 +156,10 @@ mod tests {
         let sp = StorePath::try_from(String::from("/nix/store/fake-darwin-profile")).unwrap();
         let profile = Profile::from_store_path_unchecked(sp, ProfileType::NixDarwin);
 
-        // For nix-darwin, activation_command should return darwin-rebuild activate.
+        // For nix-darwin, activation_command should return the activate script only.
         let cmd = profile.activation_command(Goal::Switch).unwrap();
-        assert_eq!(cmd.len(), 2);
-        assert!(cmd[0].ends_with("sw/bin/darwin-rebuild"));
-        assert_eq!(cmd[1], "activate");
+        assert_eq!(cmd.len(), 1);
+        assert!(cmd[0].ends_with("activate"));
     }
 
     #[test]
