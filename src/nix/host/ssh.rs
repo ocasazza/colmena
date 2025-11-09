@@ -436,67 +436,36 @@ impl Ssh {
     ///
     /// nix-darwin's Home Manager module doesn't create generations automatically.
     /// This method builds the Home Manager configuration from the flake and activates it.
-    async fn activate_darwin_home_manager(&mut self, profile: &Profile) -> ColmenaResult<()> {
+    async fn activate_darwin_home_manager(&mut self, _profile: &Profile) -> ColmenaResult<()> {
         if let Some(job) = &self.job {
             job.message("Activating Home Manager".to_string())?;
         }
 
         // Script to build and activate Home Manager from the flake
-        let hm_script = r#"
-set -euo pipefail
+        let hm_script = concat!(
+            "set -euo pipefail\n",
+            "HOSTNAME=$(hostname -s)\n",
+            "FLAKE_SOURCE=$(nix-store -q --references /nix/var/nix/profiles/system | grep -E 'source$' | head -n1 || echo \"\")\n",
+            "if [ -z \"$FLAKE_SOURCE\" ]; then echo \"Could not find flake source\"; exit 0; fi\n",
+            "for user_home in /Users/*; do\n",
+            "  username=$(basename \"$user_home\")\n",
+            "  if [ \"$username\" = \"Shared\" ] || [ \"$username\" = \".localized\" ]; then continue; fi\n",
+            "  if [ ! -d \"$user_home\" ]; then continue; fi\n",
+            "  HM_ATTR=\"darwinConfigurations.${HOSTNAME}.config.home-manager.users.${username}.home.activationPackage\"\n",
+            "  echo \"Building Home Manager for $username...\"\n",
+            "  HM_PACKAGE=$(nix build --no-link --print-out-paths \"$FLAKE_SOURCE#$HM_ATTR\" 2>&1 || echo \"\")\n",
+            "  if [ -n \"$HM_PACKAGE\" ] && [ -d \"$HM_PACKAGE\" ]; then\n",
+            "    echo \"Activating Home Manager for $username...\"\n",
+            "    sudo -u \"$username\" mkdir -p \"$user_home/.local/state/nix/profiles\"\n",
+            "    sudo -u \"$username\" nix-env --profile \"$user_home/.local/state/nix/profiles/home-manager\" --set \"$HM_PACKAGE\" 2>&1 || true\n",
+            "    if [ -x \"$HM_PACKAGE/activate\" ]; then\n",
+            "      sudo -u \"$username\" \"$HM_PACKAGE/activate\" 2>&1 || true\n",
+            "    fi\n",
+            "  fi\n",
+            "done\n"
+        );
 
-# Get the hostname for the flake attribute
-HOSTNAME=$(hostname -s)
-
-# Find the flake that built this system
-# Look for the flake source in the system profile
-FLAKE_SOURCE=$(nix-store -q --references /nix/var/nix/profiles/system | grep -E 'source$' | head -n1 || echo "")
-
-if [ -z "$FLAKE_SOURCE" ]; then
-    echo "Could not find flake source in system profile"
-    exit 0
-fi
-
-# For each user, try to build and activate their Home Manager configuration
-for user_home in /Users/*; do
-    username=$(basename "$user_home")
-
-    # Skip system directories
-    if [ "$username" = "Shared" ] || [ "$username" = ".localized" ]; then
-        continue
-    fi
-
-    if [ ! -d "$user_home" ]; then
-        continue
-    fi
-
-    # Try to build the Home Manager configuration from the flake
-    # The attribute path is: darwinConfigurations.<hostname>.config.home-manager.users.<username>.home.activationPackage
-    HM_ATTR="darwinConfigurations.${HOSTNAME}.config.home-manager.users.${username}.home.activationPackage"
-
-    echo "Building Home Manager for $username..."
-    HM_PACKAGE=$(nix build --no-link --print-out-paths "$FLAKE_SOURCE#$HM_ATTR" 2>&1 || echo "")
-
-    if [ -n "$HM_PACKAGE" ] && [ -d "$HM_PACKAGE" ]; then
-        echo "Activating Home Manager for $username..."
-
-        # Create profile directory
-        sudo -u "$username" mkdir -p "$user_home/.local/state/nix/profiles"
-
-        # Link the generation
-        sudo -u "$username" nix-env --profile "$user_home/.local/state/nix/profiles/home-manager" --set "$HM_PACKAGE" 2>&1 || true
-
-        # Activate it
-        if [ -x "$HM_PACKAGE/activate" ]; then
-            sudo -u "$username" "$HM_PACKAGE/activate" 2>&1 || true
-        fi
-    else
-        echo "No Home Manager configuration found for $username"
-    fi
-done
-"#.to_string();
-
-        let command = self.ssh(&["sh", "-c", &hm_script]);
+        let command = self.ssh(&["sh", "-c", hm_script]);
 
         // Run the script, but don't fail the deployment if HM activation fails
         match self.run_command(command).await {
