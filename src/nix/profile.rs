@@ -94,6 +94,11 @@ impl Profile {
         self.path.as_path()
     }
 
+    /// Returns the profile type.
+    pub fn profile_type(&self) -> ProfileType {
+        self.profile_type
+    }
+
     /// Create a GC root for this profile.
     pub async fn create_gc_root(&self, path: &Path) -> ColmenaResult<()> {
         let mut command = Command::new("nix-store");
