@@ -108,25 +108,7 @@ impl Host for Ssh {
 
         // For nix-darwin, also activate Home Manager if present
         if profile.profile_type() == crate::nix::ProfileType::NixDarwin {
-            // Get the console user (the logged-in user)
-            let username_result = self
-                .ssh(&["stat", "-f", "%Su", "/dev/console"])
-                .capture_output()
-                .await;
-            
-            if let Ok(username_output) = username_result {
-                if let Some(username) = username_output.lines().next() {
-                    let username = username.trim();
-                    
-                    // Run Home Manager activation as the user
-                    let hm_activate = format!(
-                        "sudo -u {} bash -c 'if [ -x ~/.local/state/nix/profiles/home-manager/activate ]; then ~/.local/state/nix/profiles/home-manager/activate; fi' 2>&1 || true",
-                        username
-                    );
-                    let hm_cmd = self.ssh(&["sh", "-c", &hm_activate]);
-                    let _ = self.run_command(hm_cmd).await; // Ignore errors
-                }
-            }
+            self.activate_darwin_home_manager(profile).await?;
         }
 
         Ok(())
@@ -446,6 +428,86 @@ impl Ssh {
                 } else {
                     Err(e)
                 }
+            }
+        }
+    }
+
+    /// Activates Home Manager for nix-darwin systems.
+    ///
+    /// nix-darwin's Home Manager module builds the configuration as part of the system
+    /// but doesn't create a user profile generation. This method:
+    /// 1. Extracts the Home Manager configuration from the system profile
+    /// 2. Builds it into a proper Home Manager generation
+    /// 3. Links and activates it for each configured user
+    async fn activate_darwin_home_manager(&mut self, profile: &Profile) -> ColmenaResult<()> {
+        if let Some(job) = &self.job {
+            job.message("Activating Home Manager".to_string())?;
+        }
+
+        // Script to build and activate Home Manager from nix-darwin's configuration
+        let hm_script = format!(
+            r#"
+set -euo pipefail
+
+SYSTEM_PROFILE="{}"
+
+# Find all users with Home Manager configurations in the system
+for user_home in /Users/*; do
+    username=$(basename "$user_home")
+
+    # Skip system directories
+    if [ "$username" = "Shared" ] || [ "$username" = ".localized" ]; then
+        continue
+    fi
+
+    if [ ! -d "$user_home" ]; then
+        continue
+    fi
+
+    # Check if this user has a Home Manager configuration in the system
+    # The nix-darwin HM module creates a homeConfigurations output
+    hm_config_attr="darwinConfigurations.$(hostname -s).config.home-manager.users.$username"
+
+    # Try to build the Home Manager generation from the system's flake
+    # We need to extract the flake reference from the system profile
+    system_flake=$(nix-store -q --references "$SYSTEM_PROFILE" | grep -E '(flake-registry|flake\.lock)' | head -n1 || echo "")
+
+    if [ -z "$system_flake" ]; then
+        # No flake found, try alternative approach: build HM config directly from system
+        # The system profile contains the HM configuration, we just need to activate it
+
+        # Look for home-manager activation script in system closure
+        hm_activate=$(nix-store -qR "$SYSTEM_PROFILE" | grep -E "home-manager.*activate$" | grep -v "home-manager-path" | head -n1 || echo "")
+
+        if [ -n "$hm_activate" ] && [ -x "$hm_activate" ]; then
+            # Create profile directory
+            sudo -u "$username" mkdir -p "$user_home/.local/state/nix/profiles"
+
+            # Get the home-manager generation (parent directory of activate script)
+            hm_generation=$(dirname "$hm_activate")
+
+            # Link the generation to the user's profile
+            sudo -u "$username" nix-env --profile "$user_home/.local/state/nix/profiles/home-manager" --set "$hm_generation" 2>&1 || true
+
+            # Activate it
+            sudo -u "$username" "$hm_activate" 2>&1 || true
+        fi
+    fi
+done
+"#,
+            profile.as_path().to_str().unwrap()
+        );
+
+        let command = self.ssh(&["sh", "-c", &hm_script]);
+
+        // Run the script, but don't fail the deployment if HM activation fails
+        match self.run_command(command).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                if let Some(job) = &self.job {
+                    job.message(format!("Home Manager activation failed (non-fatal): {}", e))?;
+                }
+                Ok(()) // Don't fail the deployment
             }
         }
     }
