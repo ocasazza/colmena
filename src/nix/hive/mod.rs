@@ -455,7 +455,7 @@ impl Hive {
         let map = match result {
             Ok(map) => map,
             Err(e) => {
-                eprintln!("eval_selected capture_json error: {:?}", e);
+                tracing::debug!("Failed to capture evalSelected JSON: {}", e);
                 return Err(e);
             }
         };
@@ -519,7 +519,7 @@ impl Hive {
         matches!(self.path(), HivePath::Flake(_))
     }
 
-    fn nix_instantiate(&self, expression: &str) -> NixInstantiate {
+    fn nix_instantiate(&self, expression: &str) -> NixInstantiate<'_> {
         NixInstantiate::new(self, expression.to_owned())
     }
 
