@@ -12,7 +12,16 @@ use tokio::time::sleep;
 use super::{key_uploader, CopyDirection, CopyOptions, Host, RebootOptions};
 use crate::error::{ColmenaError, ColmenaResult};
 use crate::job::JobHandle;
-use crate::nix::{Goal, Key, NodeConfig, Profile, StorePath, CURRENT_PROFILE, SYSTEM_PROFILE};
+use crate::nix::{
+    Goal,
+    Key,
+    NodeConfig,
+    Profile,
+    ProfileType,
+    StorePath,
+    CURRENT_PROFILE,
+    SYSTEM_PROFILE,
+};
 use crate::util::{CommandExecution, CommandExt};
 
 /// A remote machine connected over SSH.
@@ -95,20 +104,32 @@ impl Host for Ssh {
             return Err(ColmenaError::Unsupported);
         }
 
-        if goal.should_switch_profile() {
-            let path = profile.as_path().to_str().unwrap();
-            let set_profile = self.ssh(&["nix-env", "--profile", SYSTEM_PROFILE, "--set", path]);
-            self.run_command(set_profile).await?;
-        }
+        match profile.profile_type() {
+            ProfileType::NixDarwin => {
+                // Delegate activation on nix-darwin systems to `nh`.
+                //
+                // `nh darwin update` re-implements `darwin-rebuild` and will take care of:
+                // - Switching the system profile
+                // - Running the nix-darwin home-manager module
+                //
+                // This ensures that home-manager generations are updated consistently
+                // alongside the system activation.
+                let command = self.ssh(&["nh", "darwin", "update"]);
+                self.run_command(command).await?;
+            }
+            ProfileType::NixOS => {
+                if goal.should_switch_profile() {
+                    let path = profile.as_path().to_str().unwrap();
+                    let set_profile =
+                        self.ssh(&["nix-env", "--profile", SYSTEM_PROFILE, "--set", path]);
+                    self.run_command(set_profile).await?;
+                }
 
-        let activation_command = profile.activation_command(goal).unwrap();
-        let v: Vec<&str> = activation_command.iter().map(|s| &**s).collect();
-        let command = self.ssh(&v);
-        self.run_command(command).await?;
-
-        // For nix-darwin, also activate Home Manager if present
-        if profile.profile_type() == crate::nix::ProfileType::NixDarwin {
-            self.activate_darwin_home_manager(profile).await?;
+                let activation_command = profile.activation_command(goal).unwrap();
+                let v: Vec<&str> = activation_command.iter().map(|s| &**s).collect();
+                let command = self.ssh(&v);
+                self.run_command(command).await?;
+            }
         }
 
         Ok(())
@@ -428,53 +449,6 @@ impl Ssh {
                 } else {
                     Err(e)
                 }
-            }
-        }
-    }
-
-    /// Activates Home Manager for nix-darwin systems.
-    ///
-    /// nix-darwin's Home Manager module doesn't create generations automatically.
-    /// This method builds the Home Manager configuration from the flake and activates it.
-    async fn activate_darwin_home_manager(&mut self, _profile: &Profile) -> ColmenaResult<()> {
-        if let Some(job) = &self.job {
-            job.message("Activating Home Manager".to_string())?;
-        }
-
-        // Script to build and activate Home Manager from the flake
-        let hm_script = concat!(
-            "set -euo pipefail\n",
-            "HOSTNAME=$(hostname -s)\n",
-            "FLAKE_SOURCE=$(nix-store -q --references /nix/var/nix/profiles/system | grep -E 'source$' | head -n1 || echo \"\")\n",
-            "if [ -z \"$FLAKE_SOURCE\" ]; then echo \"Could not find flake source\"; exit 0; fi\n",
-            "for user_home in /Users/*; do\n",
-            "  username=$(basename \"$user_home\")\n",
-            "  if [ \"$username\" = \"Shared\" ] || [ \"$username\" = \".localized\" ]; then continue; fi\n",
-            "  if [ ! -d \"$user_home\" ]; then continue; fi\n",
-            "  HM_ATTR=\"darwinConfigurations.${HOSTNAME}.config.home-manager.users.${username}.home.activationPackage\"\n",
-            "  echo \"Building Home Manager for $username...\"\n",
-            "  HM_PACKAGE=$(nix build --no-link --print-out-paths \"$FLAKE_SOURCE#$HM_ATTR\" 2>&1 || echo \"\")\n",
-            "  if [ -n \"$HM_PACKAGE\" ] && [ -d \"$HM_PACKAGE\" ]; then\n",
-            "    echo \"Activating Home Manager for $username...\"\n",
-            "    sudo -u \"$username\" mkdir -p \"$user_home/.local/state/nix/profiles\"\n",
-            "    sudo -u \"$username\" nix-env --profile \"$user_home/.local/state/nix/profiles/home-manager\" --set \"$HM_PACKAGE\" 2>&1 || true\n",
-            "    if [ -x \"$HM_PACKAGE/activate\" ]; then\n",
-            "      sudo -u \"$username\" \"$HM_PACKAGE/activate\" 2>&1 || true\n",
-            "    fi\n",
-            "  fi\n",
-            "done\n"
-        );
-
-        let command = self.ssh(&["sh", "-c", hm_script]);
-
-        // Run the script, but don't fail the deployment if HM activation fails
-        match self.run_command(command).await {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                if let Some(job) = &self.job {
-                    job.message(format!("Home Manager activation failed (non-fatal): {}", e))?;
-                }
-                Ok(()) // Don't fail the deployment
             }
         }
     }
