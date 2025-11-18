@@ -110,8 +110,7 @@ impl Host for Ssh {
                 // if we are switching profiles. This is similar to what `darwin-rebuild switch` does.
                 if goal.should_switch_profile() {
                     let path = profile.as_path().to_str().unwrap();
-                    let set_profile = self.ssh_no_escalation(&[
-                        "sudo",
+                    let set_profile = self.ssh(&[
                         "nix-env",
                         "--profile",
                         SYSTEM_PROFILE,
@@ -121,21 +120,16 @@ impl Host for Ssh {
                     self.run_command(set_profile).await?;
                 }
 
-                // For nix-darwin, explicitly run the system's `activate` script via sudo.
-                // We don't rely on the hive's privilegeEscalationCommand here because for
-                // Darwin we want a consistent, explicit `sudo` invocation, while still
-                // reusing the same SSH options.
+                // For nix-darwin, run the system's `activate` script.
+                // We use self.ssh() to respect the hive's privilegeEscalationCommand (e.g., sudo).
                 let activation_command = profile.activation_command(goal).unwrap();
-                let mut args: Vec<String> = Vec::with_capacity(1 + activation_command.len());
-                args.push("sudo".to_string());
-                args.extend(activation_command.iter().cloned());
-                let v: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-                let command = self.ssh_no_escalation(&v);
+                let v: Vec<&str> = activation_command.iter().map(|s| s.as_str()).collect();
+                let command = self.ssh(&v);
                 self.run_command(command).await?;
 
                 // Attempt to run `nh home switch` to handle standalone Home Manager configurations.
                 // This allows support for both integrated (via darwin-rebuild above) and standalone setups.
-                // We run this without sudo as Home Manager runs as the user.
+                // We run this without sudo as Home Manager runs as the target user.
                 // We ignore failure here to allow integrated setups (where `nh home switch` might fail) to succeed.
                 // Note: This assumes `nh` is installed and configured on the target.
                 let hm_command = self.ssh_no_escalation(&["sh", "-c", "nh home switch || true"]);
