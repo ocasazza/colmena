@@ -139,7 +139,6 @@ impl Host for Ssh {
                 // We check for `nh` existence to avoid failing if it's not installed, but if it IS installed,
                 // we allow it to fail (and propagate error) so the user sees why it failed (e.g. missing flake).
                 let hm_command = self.ssh_no_escalation(&[
-                    "sh", "-c",
                     "if command -v nh >/dev/null; then $SHELL -l -c 'nh home switch'; fi"
                 ]);
                 self.run_command(hm_command).await?;
