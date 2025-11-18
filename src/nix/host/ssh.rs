@@ -134,11 +134,14 @@ impl Host for Ssh {
                 self.run_command(command).await?;
 
                 // Attempt to run `nh home switch` to handle standalone Home Manager configurations.
-                // This allows support for both integrated (via darwin-rebuild above) and standalone setups.
                 // We run this without sudo as Home Manager runs as the target user.
-                // We ignore failure here to allow integrated setups (where `nh home switch` might fail) to succeed.
-                // Note: This assumes `nh` is installed and configured on the target.
-                let hm_command = self.ssh_no_escalation(&["sh", "-c", "nh home switch || true"]);
+                // We wrap this in a login shell ($SHELL -l) to ensure environment variables (PATH, FLAKE) are loaded.
+                // We check for `nh` existence to avoid failing if it's not installed, but if it IS installed,
+                // we allow it to fail (and propagate error) so the user sees why it failed (e.g. missing flake).
+                let hm_command = self.ssh_no_escalation(&[
+                    "sh", "-c",
+                    "if command -v nh >/dev/null; then $SHELL -l -c 'nh home switch'; fi"
+                ]);
                 self.run_command(hm_command).await?;
             }
             ProfileType::NixOS => {
