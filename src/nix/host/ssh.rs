@@ -106,16 +106,40 @@ impl Host for Ssh {
 
         match profile.profile_type() {
             ProfileType::NixDarwin => {
-                // Delegate activation on nix-darwin systems to `nh`.
-                //
-                // `nh darwin update` re-implements `darwin-rebuild` and will take care of:
-                // - Switching the system profile
-                // - Running the nix-darwin home-manager module
-                //
-                // This ensures that home-manager generations are updated consistently
-                // alongside the system activation.
-                let command = self.ssh(&["nh", "darwin", "update"]);
+                // For nix-darwin, we need to update the system profile symlink first
+                // if we are switching profiles. This is similar to what `darwin-rebuild switch` does.
+                if goal.should_switch_profile() {
+                    let path = profile.as_path().to_str().unwrap();
+                    let set_profile = self.ssh_no_escalation(&[
+                        "sudo",
+                        "nix-env",
+                        "--profile",
+                        SYSTEM_PROFILE,
+                        "--set",
+                        path,
+                    ]);
+                    self.run_command(set_profile).await?;
+                }
+
+                // For nix-darwin, explicitly run the system's `activate` script via sudo.
+                // We don't rely on the hive's privilegeEscalationCommand here because for
+                // Darwin we want a consistent, explicit `sudo` invocation, while still
+                // reusing the same SSH options.
+                let activation_command = profile.activation_command(goal).unwrap();
+                let mut args: Vec<String> = Vec::with_capacity(1 + activation_command.len());
+                args.push("sudo".to_string());
+                args.extend(activation_command.iter().cloned());
+                let v: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+                let command = self.ssh_no_escalation(&v);
                 self.run_command(command).await?;
+
+                // Attempt to run `nh home switch` to handle standalone Home Manager configurations.
+                // This allows support for both integrated (via darwin-rebuild above) and standalone setups.
+                // We run this without sudo as Home Manager runs as the user.
+                // We ignore failure here to allow integrated setups (where `nh home switch` might fail) to succeed.
+                // Note: This assumes `nh` is installed and configured on the target.
+                let hm_command = self.ssh_no_escalation(&["sh", "-c", "nh home switch || true"]);
+                self.run_command(hm_command).await?;
             }
             ProfileType::NixOS => {
                 if goal.should_switch_profile() {
@@ -272,6 +296,25 @@ impl Ssh {
             .args(&options)
             .arg("--")
             .args(privilege_escalation_command)
+            .args(command)
+            .env("NIX_SSHOPTS", options_str);
+
+        cmd
+    }
+
+    /// Returns a Tokio Command to run an arbitrary command on the host without
+    /// applying the configured privilege escalation command. This is useful for
+    /// call sites that want to manage `sudo` or other elevation mechanisms
+    /// explicitly in the remote command arguments.
+    pub fn ssh_no_escalation(&self, command: &[&str]) -> Command {
+        let options = self.ssh_options();
+        let options_str = options.join(" ");
+
+        let mut cmd = Command::new("ssh");
+
+        cmd.arg(self.ssh_target())
+            .args(&options)
+            .arg("--")
             .args(command)
             .env("NIX_SSHOPTS", options_str);
 
