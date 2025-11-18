@@ -143,14 +143,20 @@ impl Host for Ssh {
                 let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
                 let cwd_str = cwd.to_string_lossy();
 
-                // Inner script to run inside the login shell
-                // We cd to the local CWD (assuming it matches remote) and run nh home switch without arguments.
-                // This mimics manual execution and avoids issues with argument parsing or aliases.
-                // We fail if nh is missing or fails, to provide visibility.
+                // Inner script to run inside the login shell (interactive mode to pick up aliases)
+                // We cd to the local CWD and run nh home switch.
+                // We use interactive flag -i to try and load user aliases/functions if nh relies on them.
+                // We ignore failure to prevent breaking the main deployment, but log output.
                 let inner_script = format!(
-                    "cd \"{}\" 2>/dev/null || exit 0; if command -v nh >/dev/null; then echo 'Running nh home switch...'; command nh home switch; else echo 'nh not found'; exit 0; fi",
+                    "cd \"{}\" 2>/dev/null; echo 'Attempting nh home switch...'; nh home switch || echo 'nh failed (ignored)'",
                     cwd_str
                 );
+
+                // Wrap in interactive login shell
+                let final_cmd = format!("exec $SHELL -i -l -c '{}'", inner_script);
+
+                let hm_command = self.ssh_no_escalation(&[&final_cmd]);
+                self.run_command(hm_command).await?;
 
                 // Escape single quotes for wrapping in '...'
                 let inner_escaped = inner_script.replace("'", "'\\''");
