@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::convert::TryInto;
+use std::env;
 use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -135,12 +136,16 @@ impl Host for Ssh {
 
                 // Attempt to run `nh home switch` to handle standalone Home Manager configurations.
                 // We run this without sudo as Home Manager runs as the target user.
-                // We wrap this in a login shell ($SHELL -l) to ensure environment variables (PATH, FLAKE) are loaded.
-                // We check for `nh` existence to avoid failing if it's not installed, but if it IS installed,
-                // we allow it to fail (and propagate error) so the user sees why it failed (e.g. missing flake).
-                let hm_command = self.ssh_no_escalation(&[
-                    "if command -v nh >/dev/null; then $SHELL -l -c 'nh home switch'; fi"
-                ]);
+                // We try to cd into the local CWD on the remote host (useful for `apply-on $(hostname)`).
+                // We wrap this in a login shell ($SHELL -l) to ensure environment variables are loaded.
+                // We ignore failures to avoid breaking the deployment if nh is missing or fails.
+                let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let cwd_str = cwd.to_string_lossy();
+                let nh_cmd = format!(
+                    "if command -v nh >/dev/null; then cd \"{}\" 2>/dev/null; $SHELL -l -c 'nh home switch' || true; fi",
+                    cwd_str
+                );
+                let hm_command = self.ssh_no_escalation(&[&nh_cmd]);
                 self.run_command(hm_command).await?;
             }
             ProfileType::NixOS => {
