@@ -175,18 +175,8 @@ impl Host for Ssh {
 
                 // We ignore the result because nh might fail (e.g. interactive prompt we can't answer)
                 // but we want to try.
-                // Actually, if we allocate TTY, we might see output.
                 // We map error to Ok to avoid failing deployment if nh fails (preserving "best effort" standalone support).
                 let _ = self.run_command(nh_ssh).await;
-
-                // Escape single quotes for wrapping in '...'
-                let inner_escaped = inner_script.replace("'", "'\\''");
-
-                // Wrap in login shell execution
-                let final_cmd = format!("exec $SHELL -l -c '{}'", inner_escaped);
-
-                let hm_command = self.ssh_no_escalation(&[&final_cmd]);
-                self.run_command(hm_command).await?;
             }
             ProfileType::NixOS => {
                 if goal.should_switch_profile() {
