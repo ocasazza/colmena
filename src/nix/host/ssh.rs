@@ -121,36 +121,31 @@ impl Host for Ssh {
                     self.run_command(set_profile).await?;
                 }
 
-                // For nix-darwin, run the system's `activate` script.
-                // We use self.ssh() to respect the hive's privilegeEscalationCommand (e.g., sudo).
-                // We also explicitly set systemConfig to ensure darwin-rebuild knows where the profile is,
-                // preventing errors where it might misidentify the script path as the config path.
-                let activation_command = profile.activation_command(goal).unwrap();
+                // For nix-darwin, we run the activation script directly to bypass potential issues
+                // with darwin-rebuild path resolution (e.g., the "Not a directory" error).
+                // We explicitly set systemConfig env var which the activation script expects.
+                // The activation script is located at `${systemConfig}/activate`.
                 let profile_path = profile.as_path().to_str().unwrap();
-                let cmd_path = &activation_command[0];
-                let action = &activation_command[1];
+                let activate_script = profile.as_path().join("activate");
+                let activate_script_str = activate_script.to_str().unwrap();
 
-                let cmd_str = format!("systemConfig={} \"{}\" {}", profile_path, cmd_path, action);
+                let cmd_str = format!("systemConfig={} \"{}\"", profile_path, activate_script_str);
                 let command = self.ssh(&["sh", "-c", &cmd_str]);
                 self.run_command(command).await?;
 
                 // Attempt to run `nh home switch` to handle standalone Home Manager configurations.
                 // We run this without sudo as Home Manager runs as the target user.
-                // We execute everything inside a login shell to ensure PATH and other env vars are loaded,
-                // which is necessary to find `nh` and the flake.
+                // We execute everything inside a login shell to ensure PATH and other env vars are loaded.
                 // We try to cd into the local CWD on the remote host (useful for `apply-on $(hostname)`).
-                // We only run nh if it exists. If it runs and fails, we allow the failure to propagate so the user knows.
+                // We only run nh if it exists. If it runs and fails, we allow the failure to propagate.
                 let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
                 let cwd_str = cwd.to_string_lossy();
 
-                // Inner script to run inside the login shell
-                // We cd to the local CWD and run nh home switch.
                 let inner_script = format!(
                     "cd \"{}\" 2>/dev/null; if command -v nh >/dev/null; then echo 'Running nh home switch...'; nh home switch .; else echo 'nh not found'; exit 0; fi",
                     cwd_str
                 );
 
-                // Wrap in login shell
                 let inner_escaped = inner_script.replace("'", "'\\''");
                 let final_cmd = format!("exec $SHELL -l -c '{}'", inner_escaped);
 
@@ -173,8 +168,6 @@ impl Host for Ssh {
                 nh_ssh.arg("--");
                 nh_ssh.arg(final_cmd);
 
-                // We ignore the result because nh might fail (e.g. interactive prompt we can't answer)
-                // but we want to try.
                 // We map error to Ok to avoid failing deployment if nh fails (preserving "best effort" standalone support).
                 let _ = self.run_command(nh_ssh).await;
             }
