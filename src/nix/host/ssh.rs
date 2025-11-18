@@ -143,20 +143,41 @@ impl Host for Ssh {
                 let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
                 let cwd_str = cwd.to_string_lossy();
 
-                // Inner script to run inside the login shell (interactive mode to pick up aliases)
+                // Inner script to run inside the login shell
                 // We cd to the local CWD and run nh home switch.
-                // We use interactive flag -i to try and load user aliases/functions if nh relies on them.
-                // We ignore failure to prevent breaking the main deployment, but log output.
                 let inner_script = format!(
-                    "cd \"{}\" 2>/dev/null; echo 'Attempting nh home switch...'; nh home switch || echo 'nh failed (ignored)'",
+                    "cd \"{}\" 2>/dev/null; if command -v nh >/dev/null; then echo 'Running nh home switch...'; nh home switch .; else echo 'nh not found'; exit 0; fi",
                     cwd_str
                 );
 
-                // Wrap in interactive login shell
-                let final_cmd = format!("exec $SHELL -i -l -c '{}'", inner_script);
+                // Wrap in login shell
+                let inner_escaped = inner_script.replace("'", "'\\''");
+                let final_cmd = format!("exec $SHELL -l -c '{}'", inner_escaped);
 
-                let hm_command = self.ssh_no_escalation(&[&final_cmd]);
-                self.run_command(hm_command).await?;
+                // We manually construct the SSH command to force TTY allocation (-t)
+                // This is because `nh` (or its underlying tools) may behave differently or fail
+                // without a TTY (e.g. "more values required" error from clap/progress bars).
+                let mut nh_ssh = Command::new("ssh");
+                nh_ssh.args(&["-o", "StrictHostKeyChecking=accept-new"]);
+                nh_ssh.args(&["-o", "BatchMode=yes"]);
+                nh_ssh.arg("-t"); // Force TTY allocation
+
+                if let Some(port) = self.port {
+                    nh_ssh.args(&["-p", &port.to_string()]);
+                }
+                if let Some(ssh_config) = &self.ssh_config {
+                    nh_ssh.args(&["-F", ssh_config.to_str().unwrap()]);
+                }
+
+                nh_ssh.arg(self.ssh_target());
+                nh_ssh.arg("--");
+                nh_ssh.arg(final_cmd);
+
+                // We ignore the result because nh might fail (e.g. interactive prompt we can't answer)
+                // but we want to try.
+                // Actually, if we allocate TTY, we might see output.
+                // We map error to Ok to avoid failing deployment if nh fails (preserving "best effort" standalone support).
+                let _ = self.run_command(nh_ssh).await;
 
                 // Escape single quotes for wrapping in '...'
                 let inner_escaped = inner_script.replace("'", "'\\''");
