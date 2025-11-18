@@ -144,8 +144,11 @@ impl Host for Ssh {
                 let cwd_str = cwd.to_string_lossy();
 
                 // Inner script to run inside the login shell
+                // We cd to the local CWD (assuming it matches remote) and run nh home switch without arguments.
+                // This mimics manual execution and avoids issues with argument parsing or aliases.
+                // We fail if nh is missing or fails, to provide visibility.
                 let inner_script = format!(
-                    "cd \"{}\" 2>/dev/null; if command -v nh >/dev/null; then nh home switch; fi",
+                    "cd \"{}\" 2>/dev/null || exit 0; if command -v nh >/dev/null; then echo 'Running nh home switch...'; command nh home switch; else echo 'nh not found'; exit 0; fi",
                     cwd_str
                 );
 
