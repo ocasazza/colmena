@@ -69,14 +69,16 @@ impl Profile {
                     Some(vec![activation_command, goal.to_string()])
                 }
                 ProfileType::NixDarwin => {
-                    // For darwin, use the activate script directly instead of darwin-rebuild
-                    // to avoid NIX_PATH requirements
-                    let path = self.as_path().join("activate");
+                    // For darwin, run the configuration's darwin-rebuild wrapper with
+                    // the "activate" subcommand, as recommended by nix-darwin for
+                    // third-party deployment tools.
+                    let path = self.as_path().join("sw/bin/darwin-rebuild");
                     let activation_command = path
                         .to_str()
                         .expect("The string should be UTF-8 valid")
                         .to_string();
-                    Some(vec![activation_command])
+                    // `$systemConfig/sw/bin/darwin-rebuild activate`
+                    Some(vec![activation_command, "activate".to_string()])
                 }
             }
         } else {
@@ -161,10 +163,12 @@ mod tests {
         let sp = StorePath::try_from(String::from("/nix/store/fake-darwin-profile")).unwrap();
         let profile = Profile::from_store_path_unchecked(sp, ProfileType::NixDarwin);
 
-        // For nix-darwin, activation_command should return the activate script only.
+        // For nix-darwin, activation_command should use the configuration-scoped
+        // darwin-rebuild wrapper and pass "activate" as the subcommand.
         let cmd = profile.activation_command(Goal::Switch).unwrap();
-        assert_eq!(cmd.len(), 1);
-        assert!(cmd[0].ends_with("activate"));
+        assert_eq!(cmd.len(), 2);
+        assert!(cmd[0].ends_with("sw/bin/darwin-rebuild"));
+        assert_eq!(cmd[1], "activate");
     }
 
     #[test]
