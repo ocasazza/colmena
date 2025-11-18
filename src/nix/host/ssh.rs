@@ -122,9 +122,15 @@ impl Host for Ssh {
 
                 // For nix-darwin, run the system's `activate` script.
                 // We use self.ssh() to respect the hive's privilegeEscalationCommand (e.g., sudo).
+                // We also explicitly set systemConfig to ensure darwin-rebuild knows where the profile is,
+                // preventing errors where it might misidentify the script path as the config path.
                 let activation_command = profile.activation_command(goal).unwrap();
-                let v: Vec<&str> = activation_command.iter().map(|s| s.as_str()).collect();
-                let command = self.ssh(&v);
+                let profile_path = profile.as_path().to_str().unwrap();
+                let cmd_path = &activation_command[0];
+                let action = &activation_command[1];
+
+                let cmd_str = format!("systemConfig={} \"{}\" {}", profile_path, cmd_path, action);
+                let command = self.ssh(&["sh", "-c", &cmd_str]);
                 self.run_command(command).await?;
 
                 // Attempt to run `nh home switch` to handle standalone Home Manager configurations.
