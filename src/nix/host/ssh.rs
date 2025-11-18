@@ -136,16 +136,26 @@ impl Host for Ssh {
 
                 // Attempt to run `nh home switch` to handle standalone Home Manager configurations.
                 // We run this without sudo as Home Manager runs as the target user.
+                // We execute everything inside a login shell to ensure PATH and other env vars are loaded,
+                // which is necessary to find `nh` and the flake.
                 // We try to cd into the local CWD on the remote host (useful for `apply-on $(hostname)`).
-                // We wrap this in a login shell ($SHELL -l) to ensure environment variables are loaded.
-                // We ignore failures to avoid breaking the deployment if nh is missing or fails.
+                // We only run nh if it exists. If it runs and fails, we allow the failure to propagate so the user knows.
                 let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
                 let cwd_str = cwd.to_string_lossy();
-                let nh_cmd = format!(
-                    "if command -v nh >/dev/null; then cd \"{}\" 2>/dev/null; $SHELL -l -c 'nh home switch' || true; fi",
+
+                // Inner script to run inside the login shell
+                let inner_script = format!(
+                    "cd \"{}\" 2>/dev/null; if command -v nh >/dev/null; then nh home switch; fi",
                     cwd_str
                 );
-                let hm_command = self.ssh_no_escalation(&[&nh_cmd]);
+
+                // Escape single quotes for wrapping in '...'
+                let inner_escaped = inner_script.replace("'", "'\\''");
+
+                // Wrap in login shell execution
+                let final_cmd = format!("exec $SHELL -l -c '{}'", inner_escaped);
+
+                let hm_command = self.ssh_no_escalation(&[&final_cmd]);
                 self.run_command(hm_command).await?;
             }
             ProfileType::NixOS => {
