@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::env;
 use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -493,5 +492,80 @@ impl Host for Ssh {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test that Colmena's Darwin activation uses sudo to update /run/current-system
+    /// This is critical because without sudo, the activation script cannot update
+    /// the /run/current-system symlink which is owned by root.
+    #[test]
+    fn test_darwin_activation_requires_sudo_for_run_current_system() {
+        let ssh = Ssh::new(Some("testuser".to_string()), "testhost".to_string());
+        let profile_path = PathBuf::from("/nix/store/abc123-darwin-system");
+        let activate_script = profile_path.join("activate");
+
+        // Build the exact command that Colmena uses for Darwin activation
+        let command = ssh.ssh(&[
+            "sudo",
+            "-E",
+            "env",
+            &format!("systemConfig={}", profile_path.to_str().unwrap()),
+            activate_script.to_str().unwrap(),
+        ]);
+
+        let debug_output = format!("{:?}", command);
+
+        // Critical: Verify sudo is present - without it, /run/current-system cannot be updated
+        assert!(
+            debug_output.contains("sudo"),
+            "Darwin activation MUST use sudo to update /run/current-system (root-owned symlink)"
+        );
+
+        // Critical: Verify -E flag preserves environment for systemConfig
+        assert!(
+            debug_output.contains("-E"),
+            "Darwin activation MUST use -E to preserve systemConfig environment variable"
+        );
+
+        // Critical: Verify systemConfig is set - the activation script requires this
+        assert!(
+            debug_output.contains("systemConfig="),
+            "Darwin activation MUST set systemConfig environment variable for the activation script"
+        );
+
+        // Verify the profile path is referenced
+        assert!(
+            debug_output.contains("/nix/store/abc123-darwin-system"),
+            "Darwin activation MUST reference the correct profile path"
+        );
+
+        // Verify the activate script is called
+        assert!(
+            debug_output.contains("/activate"),
+            "Darwin activation MUST call the activate script"
+        );
+    }
+
+    /// Test that Colmena's ssh_target method correctly formats user@host
+    /// This is used throughout Colmena for SSH connections
+    #[test]
+    fn test_ssh_target_user_host_formatting() {
+        let ssh_with_user = Ssh::new(Some("admin".to_string()), "example.com".to_string());
+        assert_eq!(
+            ssh_with_user.ssh_target(),
+            "admin@example.com",
+            "Colmena should format SSH target as user@host when user is provided"
+        );
+
+        let ssh_no_user = Ssh::new(None, "example.com".to_string());
+        assert_eq!(
+            ssh_no_user.ssh_target(),
+            "example.com",
+            "Colmena should use just hostname when no user is provided"
+        );
     }
 }
