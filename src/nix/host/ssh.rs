@@ -387,44 +387,6 @@ impl Host for Ssh {
                 let cmd_str = format!("systemConfig={} \"{}\"", profile_path, activate_script_str);
                 let command = self.ssh(&["sh", "-c", &cmd_str]);
                 self.run_command(command).await?;
-
-                // Attempt to run `nh home switch` to handle standalone Home Manager configurations.
-                // We run this without sudo as Home Manager runs as the target user.
-                // We execute everything inside a login shell to ensure PATH and other env vars are loaded.
-                // We try to cd into the local CWD on the remote host (useful for `apply-on $(hostname)`).
-                // We only run nh if it exists. If it runs and fails, we allow the failure to propagate.
-                let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-                let cwd_str = cwd.to_string_lossy();
-
-                let inner_script = format!(
-                    "set -x; cd \"{}\" 2>/dev/null; nh home switch .",
-                    cwd_str
-                );
-
-                let inner_escaped = inner_script.replace("'", "'\\''");
-                let final_cmd = format!("exec $SHELL -l -c '{}'", inner_escaped);
-
-                // We manually construct the SSH command to force TTY allocation (-t)
-                // This is because `nh` (or its underlying tools) may behave differently or fail
-                // without a TTY (e.g. "more values required" error from clap/progress bars).
-                let mut nh_ssh = Command::new("ssh");
-                nh_ssh.args(&["-o", "StrictHostKeyChecking=accept-new"]);
-                nh_ssh.args(&["-o", "BatchMode=yes"]);
-                nh_ssh.arg("-t"); // Force TTY allocation
-
-                if let Some(port) = self.port {
-                    nh_ssh.args(&["-p", &port.to_string()]);
-                }
-                if let Some(ssh_config) = &self.ssh_config {
-                    nh_ssh.args(&["-F", ssh_config.to_str().unwrap()]);
-                }
-
-                nh_ssh.arg(self.ssh_target());
-                nh_ssh.arg("--");
-                nh_ssh.arg(final_cmd);
-
-                // We map error to Ok to avoid failing deployment if nh fails (preserving "best effort" standalone support).
-                let _ = self.run_command(nh_ssh).await;
             }
             ProfileType::NixOS => {
                 if goal.should_switch_profile() {
