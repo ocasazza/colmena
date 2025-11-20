@@ -380,12 +380,19 @@ impl Host for Ssh {
                 // with darwin-rebuild path resolution (e.g., the "Not a directory" error).
                 // We explicitly set systemConfig env var which the activation script expects.
                 // The activation script is located at `${systemConfig}/activate`.
+                // IMPORTANT: The activation script must run with sudo to update /run/current-system
                 let profile_path = profile.as_path().to_str().unwrap();
                 let activate_script = profile.as_path().join("activate");
                 let activate_script_str = activate_script.to_str().unwrap();
 
-                let cmd_str = format!("systemConfig={} \"{}\"", profile_path, activate_script_str);
-                let command = self.ssh(&["sh", "-c", &cmd_str]);
+                // Run activation with explicit sudo and systemConfig env var
+                let command = self.ssh(&[
+                    "sudo",
+                    "-E",  // Preserve environment variables
+                    "env",
+                    &format!("systemConfig={}", profile_path),
+                    activate_script_str,
+                ]);
                 self.run_command(command).await?;
             }
             ProfileType::NixOS => {
