@@ -478,10 +478,8 @@ impl Host for Ssh {
                     break;
                 }
             }
-
             sleep(Duration::from_secs(2)).await;
         }
-
         // Ensure node has correct system profile
         if let Some(new_profile) = options.new_profile {
             let profile = self.get_current_system_profile(config).await?;
@@ -490,7 +488,6 @@ impl Host for Ssh {
                 return Err(ColmenaError::ActiveProfileUnexpected { profile });
             }
         }
-
         Ok(())
     }
 }
@@ -507,7 +504,6 @@ mod tests {
         let ssh = Ssh::new(Some("testuser".to_string()), "testhost".to_string());
         let profile_path = PathBuf::from("/nix/store/abc123-darwin-system");
         let activate_script = profile_path.join("activate");
-
         // Build the exact command that Colmena uses for Darwin activation
         let command = ssh.ssh(&[
             "sudo",
@@ -516,33 +512,27 @@ mod tests {
             &format!("systemConfig={}", profile_path.to_str().unwrap()),
             activate_script.to_str().unwrap(),
         ]);
-
         let debug_output = format!("{:?}", command);
-
         // Critical: Verify sudo is present - without it, /run/current-system cannot be updated
         assert!(
             debug_output.contains("sudo"),
             "Darwin activation MUST use sudo to update /run/current-system (root-owned symlink)"
         );
-
         // Critical: Verify -E flag preserves environment for systemConfig
         assert!(
             debug_output.contains("-E"),
             "Darwin activation MUST use -E to preserve systemConfig environment variable"
         );
-
         // Critical: Verify systemConfig is set - the activation script requires this
         assert!(
             debug_output.contains("systemConfig="),
             "Darwin activation MUST set systemConfig environment variable for the activation script"
         );
-
         // Verify the profile path is referenced
         assert!(
             debug_output.contains("/nix/store/abc123-darwin-system"),
             "Darwin activation MUST reference the correct profile path"
         );
-
         // Verify the activate script is called
         assert!(
             debug_output.contains("/activate"),
